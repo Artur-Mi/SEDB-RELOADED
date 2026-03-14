@@ -127,6 +127,14 @@ namespace SEDiscordBridge
                         foundMutedPlayer = true;
                 }
 
+                if (msg.Author != null && !Config.GoodBotToDiscord && msg.Author == "Good.bot")
+                {
+                    if (DEBUG)
+                        Log.Info("Message Received from Good.bot! Not sending it...");
+
+                    return;
+                }
+
                 if (msg.AuthorSteamId != null && !foundMutedPlayer) {
                     if (DEBUG)
                         Log.Info($"Recieved messages with valid SID {msg.Author} | {msg.Message} | {msg.Target} | {msg.AuthorSteamId}");
