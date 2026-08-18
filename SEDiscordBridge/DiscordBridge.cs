@@ -79,6 +79,7 @@ namespace SEDiscordBridge
                     HttpTimeout = TimeSpan.FromSeconds(10),
                     MessageCacheSize = 2048,
                     LargeThreshold = 250,
+                    Intents = DiscordIntents.AllUnprivileged | DiscordIntents.MessageContents,
                 };
 
                 Discord = new DiscordClient(DiscordConfiguration);
