@@ -4,6 +4,7 @@ on:
   push:
     branches: [ master ]
   pull_request:
+    branches: [ master ]
   workflow_dispatch:
 
 env:
@@ -11,12 +12,17 @@ env:
   TORCH_URL: 'https://build.torchapi.com/job/Torch/job/master/lastSuccessfulBuild/artifact/bin/torch-server.zip'
 
 jobs:
+  # Pushes only ever run on master (see the trigger above). Pull requests are
+  # opt-in: the whole workflow is skipped unless the PR title contains [build],
+  # so drive-by PRs don't each burn a multi-GB steamcmd download.
+  #
   # The two fetch jobs run in parallel and hand their output to `build` through
   # the actions cache. Each one exports the exact key it used so `build` restores
   # the same entry even if the job straddles a week boundary.
   get-se:
     name: Get Space Engineers
     runs-on: windows-latest
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.title, '[build]')
     outputs:
       key: ${{ steps.stamp.outputs.key }}
     steps:
@@ -75,6 +81,7 @@ jobs:
   get-torch:
     name: Get Torch
     runs-on: windows-latest
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.title, '[build]')
     outputs:
       key: ${{ steps.stamp.outputs.key }}
     steps:
@@ -114,6 +121,7 @@ jobs:
     name: Build and upload
     runs-on: windows-latest
     needs: [ get-se, get-torch ]
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.title, '[build]')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
