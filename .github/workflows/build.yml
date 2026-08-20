@@ -1,0 +1,118 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  SE_APPID: '298740'
+  TORCH_URL: 'https://build.torchapi.com/job/Torch/job/master/lastSuccessfulBuild/artifact/bin/torch-server.zip'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Binaries are refreshed weekly so the plugin keeps building against a
+      # recent SE / Torch without re-downloading several GB on every run.
+      - name: Compute cache stamp
+        id: stamp
+        shell: pwsh
+        run: |
+          $now = Get-Date
+          $week = '{0}-{1:d2}' -f $now.Year, [System.Globalization.ISOWeek]::GetWeekOfYear($now)
+          "week=$week" >> $env:GITHUB_OUTPUT
+
+      - name: Cache GameBinaries
+        id: cache-game
+        uses: actions/cache@v4
+        with:
+          path: GameBinaries
+          key: gamebinaries-${{ steps.stamp.outputs.week }}
+
+      # Same source Torch's Jenkinsfile uses: steamcmd, anonymous login, app 298740
+      # (Space Engineers Dedicated Server). Only DedicatedServer64 is kept.
+      - name: Download Space Engineers Dedicated Server
+        if: steps.cache-game.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $steamRoot = 'C:\Steam'
+          $steamCmd  = Join-Path $steamRoot 'steamcmd'
+          $seRoot    = Join-Path $steamRoot 'SEDS'
+          New-Item -ItemType Directory -Force -Path $steamCmd, $seRoot | Out-Null
+
+          Invoke-WebRequest 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip' -OutFile "$steamRoot\steamcmd.zip"
+          Expand-Archive "$steamRoot\steamcmd.zip" -DestinationPath $steamCmd -Force
+
+          # steamcmd self-updates on first run and can exit non-zero even when it
+          # succeeded, so retry and judge success by the files on disk instead.
+          $exe = Join-Path $steamCmd 'steamcmd.exe'
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Host "steamcmd attempt $i"
+            & $exe +force_install_dir $seRoot +login anonymous +app_update $env:SE_APPID validate +quit
+            if (Test-Path "$seRoot\DedicatedServer64\VRage.Dedicated.dll") { break }
+          }
+          if (-not (Test-Path "$seRoot\DedicatedServer64\VRage.Dedicated.dll")) {
+            throw "steamcmd did not produce DedicatedServer64 after 3 attempts"
+          }
+
+          New-Item -ItemType Directory -Force -Path GameBinaries | Out-Null
+          Copy-Item "$seRoot\DedicatedServer64\*" GameBinaries -Recurse -Force
+
+      - name: Cache TorchBinaries
+        id: cache-torch
+        uses: actions/cache@v4
+        with:
+          path: TorchBinaries
+          key: torchbinaries-${{ steps.stamp.outputs.week }}
+
+      - name: Download Torch
+        if: steps.cache-torch.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path TorchBinaries | Out-Null
+          Invoke-WebRequest $env:TORCH_URL -OutFile torch-server.zip
+          Expand-Archive torch-server.zip -DestinationPath TorchBinaries -Force
+          if (-not (Test-Path 'TorchBinaries\Torch.API.dll')) { throw 'Torch.API.dll missing from torch-server.zip' }
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      # packages.config project: needs `nuget restore`, not `dotnet restore`.
+      - name: Restore packages
+        run: nuget restore SEDiscordBridge.sln
+
+      - name: Build
+        run: msbuild SEDiscordBridge.sln /p:Configuration=Release /p:Platform="Any CPU" /v:minimal /nologo
+
+      - name: Package plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = 'SEDiscordBridge\bin\Release'
+          $stage = 'artifact\SEDiscordBridge'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          # A Torch plugin zip is the assemblies plus manifest.xml -- no pdbs or xmldoc.
+          Get-ChildItem $out -File |
+            Where-Object { $_.Extension -eq '.dll' -or $_.Name -eq 'manifest.xml' } |
+            Copy-Item -Destination $stage
+          $version = ([xml](Get-Content 'SEDiscordBridge\manifest.xml')).PluginManifest.Version
+          Compress-Archive -Path "$stage\*" -DestinationPath "artifact\SEDiscordBridge-$version.zip" -Force
+          Get-ChildItem $stage | Select-Object Name, Length
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: SEDiscordBridge
+          path: artifact/*.zip
+          if-no-files-found: error
