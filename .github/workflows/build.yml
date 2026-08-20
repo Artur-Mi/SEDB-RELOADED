@@ -152,6 +152,64 @@ jobs:
       - name: Restore packages
         run: nuget restore SEDiscordBridge.sln
 
+      # Version the artifact off whatever torchapi already publishes for this
+      # plugin, so a build never ships a version that is already taken. The
+      # rewrite is workspace-only -- manifest.xml in the repo is not touched.
+      - name: Set plugin version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-VersionParts([string]$v) {
+              if ([string]::IsNullOrWhiteSpace($v)) { return $null }
+              $m = [regex]::Match($v, '\d+(\.\d+)*')
+              if (-not $m.Success) { return $null }
+              $parts = @($m.Value.Split('.') | ForEach-Object { [int]$_ })
+              while ($parts.Count -lt 3) { $parts += 0 }
+              return ,$parts
+          }
+
+          # Element-wise compare, zero-padding the shorter side. -1 / 0 / 1.
+          function Compare-VersionParts($a, $b) {
+              $n = [Math]::Max($a.Count, $b.Count)
+              for ($i = 0; $i -lt $n; $i++) {
+                  $x = 0; if ($i -lt $a.Count) { $x = $a[$i] }
+                  $y = 0; if ($i -lt $b.Count) { $y = $b[$i] }
+                  if ($x -lt $y) { return -1 }
+                  if ($x -gt $y) { return 1 }
+              }
+              return 0
+          }
+
+          $manifestPath = 'SEDiscordBridge\manifest.xml'
+          $xml  = [xml](Get-Content $manifestPath)
+          $guid = $xml.PluginManifest.Guid
+          $localRaw = $xml.PluginManifest.Version
+          $local = Get-VersionParts $localRaw
+          if (-not $local) { throw "could not parse version '$localRaw' from $manifestPath" }
+          Write-Host "manifest: guid=$guid version=$localRaw"
+
+          $published = $null
+          try {
+              $resp = Invoke-RestMethod "https://torchapi.com/api/plugins/search/$guid" -TimeoutSec 30
+              $published = Get-VersionParts $resp.latestVersion
+              Write-Host "torchapi:  latestVersion=$($resp.latestVersion)"
+          } catch {
+              Write-Host "::warning::plugin $guid not found on torchapi; basing version on the manifest alone"
+          }
+
+          # Never move backwards: base off whichever of the two is higher.
+          $base = $local
+          if ($published -and (Compare-VersionParts $published $local) -gt 0) { $base = $published }
+
+          # Patch is the third component; a patch bump drops any build suffix beyond it.
+          $new = '{0}.{1}.{2}' -f $base[0], $base[1], ($base[2] + 1)
+          if ($localRaw.Trim().StartsWith('v')) { $new = "v$new" }
+          Write-Host "building as $new (base $($base -join '.'))"
+
+          $xml.PluginManifest.Version = $new
+          $xml.Save((Resolve-Path $manifestPath))
+
       - name: Build
         run: msbuild SEDiscordBridge.sln /p:Configuration=Release /p:Platform="Any CPU" /v:minimal /nologo
 
