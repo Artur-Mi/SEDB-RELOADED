@@ -11,34 +11,34 @@ env:
   TORCH_URL: 'https://build.torchapi.com/job/Torch/job/master/lastSuccessfulBuild/artifact/bin/torch-server.zip'
 
 jobs:
-  build:
+  # The two fetch jobs run in parallel and hand their output to `build` through
+  # the actions cache. Each one exports the exact key it used so `build` restores
+  # the same entry even if the job straddles a week boundary.
+  get-se:
+    name: Get Space Engineers
     runs-on: windows-latest
-
+    outputs:
+      key: ${{ steps.stamp.outputs.key }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # Binaries are refreshed weekly so the plugin keeps building against a
-      # recent SE / Torch without re-downloading several GB on every run.
-      - name: Compute cache stamp
+      - name: Compute cache key
         id: stamp
         shell: pwsh
         run: |
           $now = Get-Date
           $week = '{0}-{1:d2}' -f $now.Year, [System.Globalization.ISOWeek]::GetWeekOfYear($now)
-          "week=$week" >> $env:GITHUB_OUTPUT
+          "key=gamebinaries-$week" >> $env:GITHUB_OUTPUT
 
-      - name: Cache GameBinaries
-        id: cache-game
-        uses: actions/cache@v4
+      - name: Restore cache
+        id: restore
+        uses: actions/cache/restore@v4
         with:
           path: GameBinaries
-          key: gamebinaries-${{ steps.stamp.outputs.week }}
+          key: ${{ steps.stamp.outputs.key }}
 
       # Same source Torch's Jenkinsfile uses: steamcmd, anonymous login, app 298740
       # (Space Engineers Dedicated Server). Only DedicatedServer64 is kept.
-      - name: Download Space Engineers Dedicated Server
-        if: steps.cache-game.outputs.cache-hit != 'true'
+      - name: Download dedicated server
+        if: steps.restore.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -65,15 +65,36 @@ jobs:
           New-Item -ItemType Directory -Force -Path GameBinaries | Out-Null
           Copy-Item "$seRoot\DedicatedServer64\*" GameBinaries -Recurse -Force
 
-      - name: Cache TorchBinaries
-        id: cache-torch
-        uses: actions/cache@v4
+      - name: Save cache
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: GameBinaries
+          key: ${{ steps.stamp.outputs.key }}
+
+  get-torch:
+    name: Get Torch
+    runs-on: windows-latest
+    outputs:
+      key: ${{ steps.stamp.outputs.key }}
+    steps:
+      - name: Compute cache key
+        id: stamp
+        shell: pwsh
+        run: |
+          $now = Get-Date
+          $week = '{0}-{1:d2}' -f $now.Year, [System.Globalization.ISOWeek]::GetWeekOfYear($now)
+          "key=torchbinaries-$week" >> $env:GITHUB_OUTPUT
+
+      - name: Restore cache
+        id: restore
+        uses: actions/cache/restore@v4
         with:
           path: TorchBinaries
-          key: torchbinaries-${{ steps.stamp.outputs.week }}
+          key: ${{ steps.stamp.outputs.key }}
 
       - name: Download Torch
-        if: steps.cache-torch.outputs.cache-hit != 'true'
+        if: steps.restore.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -81,6 +102,37 @@ jobs:
           Invoke-WebRequest $env:TORCH_URL -OutFile torch-server.zip
           Expand-Archive torch-server.zip -DestinationPath TorchBinaries -Force
           if (-not (Test-Path 'TorchBinaries\Torch.API.dll')) { throw 'Torch.API.dll missing from torch-server.zip' }
+
+      - name: Save cache
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: TorchBinaries
+          key: ${{ steps.stamp.outputs.key }}
+
+  build:
+    name: Build and upload
+    runs-on: windows-latest
+    needs: [ get-se, get-torch ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Both entries are guaranteed to exist -- the fetch jobs either hit them or
+      # created them -- so a miss here is a real failure, not a cold cache.
+      - name: Restore GameBinaries
+        uses: actions/cache/restore@v4
+        with:
+          path: GameBinaries
+          key: ${{ needs.get-se.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Restore TorchBinaries
+        uses: actions/cache/restore@v4
+        with:
+          path: TorchBinaries
+          key: ${{ needs.get-torch.outputs.key }}
+          fail-on-cache-miss: true
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
