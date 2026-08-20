@@ -17,6 +17,7 @@
 /.gitattributes
 /.vs/SEDiscordBridge/v16/.suo
 /.vs/SEDiscordBridge/v17
+/.vs/SEDiscordBridge/FileContentIndex
 
 SEDiscordBridge/bin/x64/Debug/
 
@@ -26,10 +27,14 @@ SEDiscordBridge/obj/x64/Debug/
 
 SEDiscordBridge/obj/x64/Release/
 
+SEDiscordBridge/obj/
+
 .vs/Supercharger/_/
 
 SEDiscordBridge/bin/Release/
 
 SEDiscordBridge/obj/Release/
+
+SEDiscordBridge/.vs/
 
 *.dat

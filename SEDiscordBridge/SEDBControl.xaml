@@ -62,6 +62,7 @@
         </StackPanel>
         <CheckBox Content="Server outputs to Discord" Margin="3" IsChecked="{Binding ServerToDiscord}" ToolTip="Send any in-game Server outputs to Discord?"/>
         <CheckBox Content="Receive Other BOT Messages" Margin="3" IsChecked="{Binding BotToGame}" ToolTip="Receive and send bot messages to in-game?"/>
+        <CheckBox Content="Relay Good.bot Messages" Margin="3" IsChecked="{Binding GoodBotToDiscord}" ToolTip="If checked, Good.bot messages will apper on Discord Chat"/>
 
         <Label Height="20">
             <LineBreak/>
